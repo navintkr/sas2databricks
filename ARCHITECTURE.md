@@ -9,8 +9,8 @@ representation (IR), and how the three front-ends (CLI, MCP, Copilot agent) shar
 1. **Deterministic first.** Anything we can convert with rules, we do — it is faster,
    free, reproducible, and reviewable. The LLM is a fallback, not the primary path.
 2. **One IR to rule them all.** SAS constructs are parsed into an engine-agnostic IR.
-   Emitters turn the IR into PySpark, Spark SQL, DLT, or Workflows. Add a target by
-   adding an emitter, not by rewriting transpilers.
+   Emitters turn the IR into PySpark, Spark SQL, DLT, Workflows, a validation notebook, or a
+   Databricks Asset Bundle. Add a target by adding an emitter, not by rewriting transpilers.
 3. **Provenance everywhere.** Every IR node tracks its source SAS span and how it was
    produced (`rule` vs `llm`) plus a confidence score. Output carries this as comments.
 4. **The LLM never runs blind.** When a node is escalated, the orchestrator gives the
@@ -28,7 +28,7 @@ flowchart TD
     E -- yes --> G[IR program]
     E -- no --> F[LLM Orchestrator<br/>model = opus-4.8 / codex / auto]
     F --> G
-    G --> H[Emitter<br/>pyspark / sparksql / dlt / workflow / validate]
+    G --> H[Emitter<br/>pyspark / sparksql / dlt / workflow / validate / bundle]
     H --> I[Output + provenance + migration report]
 ```
 
@@ -84,8 +84,21 @@ One module per SAS construct. Each takes a `RawStep` and returns IR node(s):
 - `dlt_emitter.py` — IR → Delta Live Tables (`@dlt.table`) with `@dlt.expect` quality
   rules from `WHERE` filters and optional Unity Catalog targeting.
 - `workflow_emitter.py` — IR → Databricks Workflows job JSON wiring the steps as tasks.
+  Its `build_tasks()` (task graph derived from step `inputs`, matched on full and unqualified
+  dataset names) is shared with the bundle emitter.
 - `validation_emitter.py` — a SAS-vs-Spark data-parity notebook (row count, schema, and
   per-column checksum diffs against SAS reference exports).
+- `bundle_emitter.py` — IR → Databricks Asset Bundle (`databricks.yml`): a single-program
+  bundle (`emit`, one task per step) and a project bundle (`project_bundle`, one task per
+  file), both with `dev`/`prod` deployment targets.
+
+### 6. Project assembly & reporting (`project.py`, `report_index.py`)
+- `project.py` — migrates a directory of `.sas` files into either a **flat** layout
+  (`<stem>_<filename>` + per-file reports) or a deployable **bundle** layout (`databricks.yml`
+  + `src/` notebooks + `reports/`). Shared by the CLI `migrate` command and the MCP
+  `migrate_project` tool so both stay in sync.
+- `report_index.py` — renders a project-level report index (Markdown + self-contained HTML)
+  rolling up every migrated file with portfolio totals and links to each per-file report.
 
 ## Front-ends share the same core
 

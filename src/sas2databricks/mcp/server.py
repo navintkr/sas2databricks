@@ -27,12 +27,12 @@ except ImportError as exc:  # pragma: no cover
     ) from exc
 
 from ..llm import CopilotProvider, Model
-from ..pipeline import migrate, migrate_file
+from ..pipeline import migrate
 
 mcp = FastMCP("sas2databricks")
 
 _MODELS = ", ".join(m.value for m in Model)
-_TARGETS = "pyspark, sparksql, dlt, workflow"
+_TARGETS = "pyspark, sparksql, dlt, workflow, validate, bundle"
 
 
 @mcp.tool()
@@ -76,20 +76,39 @@ convert_sas.__doc__ = (convert_sas.__doc__ or "").format(targets=_TARGETS, model
 
 @mcp.tool()
 def migrate_project(directory: str, target: str = "pyspark", model: str = "opus-4.8",
-                    out_dir: str = "out") -> str:
-    """Migrate every .sas file under ``directory`` to ``target`` and write to ``out_dir``."""
+                    out_dir: str = "out", bundle: bool = False) -> str:
+    """Migrate every .sas file under ``directory`` to ``target`` and write to ``out_dir``.
+
+    Set ``bundle=True`` to assemble a deployable Databricks Asset Bundle (databricks.yml +
+    src/ notebooks + reports/index.md). ``bundle`` requires a notebook target
+    (pyspark, sparksql, dlt, validate).
+    """
+    from .. import project as project_mod
+
     src = Path(directory)
     files = [src] if src.is_file() else sorted(src.rglob("*.sas"))
-    out = Path(out_dir)
-    out.mkdir(parents=True, exist_ok=True)
-    summary = []
-    for f in files:
-        result = migrate_file(f, target=target, model=model, provider=CopilotProvider())
-        dest = out / f"{f.stem}_{result.filename}"
-        dest.write_text(result.code, encoding="utf-8")
-        summary.append({"source": str(f), "output": str(dest),
-                        "review_count": result.review_count})
-    return json.dumps({"files": summary, "model": Model.parse(model).value}, indent=2)
+    try:
+        result = project_mod.migrate_project(
+            files, out_dir, target=target, model=model, provider=CopilotProvider(),
+            html=True, bundle=bundle,
+        )
+    except ValueError as exc:
+        return json.dumps({"error": str(exc)}, indent=2)
+
+    summary = [
+        {"source": e.source_name, "review_count": e.result.review_count}
+        for e in result.entries
+    ]
+    return json.dumps(
+        {
+            "out_dir": str(result.out),
+            "bundle": result.bundle,
+            "files": summary,
+            "total_review": result.review_count,
+            "model": Model.parse(model).value,
+        },
+        indent=2,
+    )
 
 
 @mcp.tool()

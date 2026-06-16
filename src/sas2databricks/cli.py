@@ -12,13 +12,15 @@ from rich.table import Table
 from . import __version__
 from .llm import CopilotProvider, Model, NullProvider, provider_from_env
 from .pipeline import MigrationResult, migrate_file
+from .project import BUNDLE_NOTEBOOK_TARGETS as _BUNDLE_NOTEBOOK_TARGETS
+from .project import migrate_project
 
 
 def _force_utf8() -> None:
     """Ensure non-ASCII (report tables, notes) print on legacy Windows code pages."""
     for stream in (sys.stdout, sys.stderr):
         try:
-            stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+            stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
         except (AttributeError, ValueError):
             pass
 
@@ -28,7 +30,7 @@ console = Console()
 
 _MODEL_CHOICE = click.Choice([m.value for m in Model], case_sensitive=False)
 _TARGET_CHOICE = click.Choice(
-    ["pyspark", "sparksql", "dlt", "workflow", "validate"], case_sensitive=False
+    ["pyspark", "sparksql", "dlt", "workflow", "validate", "bundle"], case_sensitive=False
 )
 
 
@@ -87,34 +89,41 @@ def convert(
 @click.option("--catalog", default=None, help="Unity Catalog catalog (dlt target).")
 @click.option("--schema", default=None, help="Unity Catalog schema (dlt target).")
 @click.option("--ref-base", default=None, help="Reference dataset folder (validate target).")
-@click.option("--html", is_flag=True, help="Also write an HTML report per file.")
+@click.option("--html", is_flag=True, help="Also write HTML reports (per file + index).")
+@click.option("--bundle", "bundle", is_flag=True,
+              help="Assemble a deployable Databricks Asset Bundle "
+                   "(databricks.yml + src/ notebooks + reports/).")
 def migrate_cmd(
     source: Path, target: str, model: str, out: Path, copilot: bool, threshold: float,
-    catalog: str | None, schema: str | None, ref_base: str | None, html: bool,
+    catalog: str | None, schema: str | None, ref_base: str | None, html: bool, bundle: bool,
 ) -> None:
     files = [source] if source.is_file() else sorted(source.rglob("*.sas"))
     if not files:
         console.print("[red]No .sas files found.[/]")
         raise SystemExit(1)
 
-    out.mkdir(parents=True, exist_ok=True)
-    options = _emit_options(catalog, schema, ref_base)
-    results: list[MigrationResult] = []
-    for f in files:
-        result = migrate_file(f, target=target, model=model, provider=_resolve_provider(copilot),
-                              threshold=threshold, **options)
-        dest = out / f"{f.stem}_{result.filename}"
-        dest.write_text(result.code, encoding="utf-8")
-        (out / f"{f.stem}_report.md").write_text(result.report_markdown(), encoding="utf-8")
-        if html:
-            (out / f"{f.stem}_report.html").write_text(result.report_html(), encoding="utf-8")
-        results.append(result)
-        console.print(f"[green]OK[/] {f.name} -> {dest.name}  "
+    if bundle and target not in _BUNDLE_NOTEBOOK_TARGETS:
+        console.print(
+            f"[red]--bundle needs a notebook target[/] "
+            f"({', '.join(sorted(_BUNDLE_NOTEBOOK_TARGETS))}); got '{target}'."
+        )
+        raise SystemExit(1)
+
+    def _print(f: Path, result: MigrationResult, dest: str) -> None:
+        console.print(f"[green]OK[/] {f.name} -> {dest}  "
                       f"({result.review_count} step(s) need review)")
 
-    total_review = sum(r.review_count for r in results)
-    console.print(f"\n[bold]Migrated {len(results)} file(s)[/] -> {out}/  "
-                  f"| {total_review} step(s) flagged for review")
+    options = _emit_options(catalog, schema, ref_base)
+    project = migrate_project(
+        files, out, target=target, model=model, provider=_resolve_provider(copilot),
+        threshold=threshold, html=html, bundle=bundle, on_file=_print, **options,
+    )
+
+    console.print(f"\n[bold]Migrated {project.file_count} file(s)[/] -> {out}/  "
+                  f"| {project.review_count} step(s) flagged for review")
+    if bundle:
+        console.print("[bold]Bundle ready.[/] Deploy with: "
+                      f"[cyan]databricks bundle deploy -t dev[/] (from {out}/)")
 
 
 # register under the friendlier name `migrate`
