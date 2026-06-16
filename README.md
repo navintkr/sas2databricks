@@ -12,7 +12,7 @@ and Workflows) — end to end.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
-[![status: alpha](https://img.shields.io/badge/status-alpha-orange.svg)](ROADMAP.md)
+[![status: beta](https://img.shields.io/badge/status-beta-brightgreen.svg)](ROADMAP.md)
 
 ---
 
@@ -35,14 +35,15 @@ are unverifiable. **sas2databricks combines both**:
 | SAS capability | Target | Engine |
 | --- | --- | --- |
 | `PROC SQL` | Spark SQL / PySpark | Deterministic (sqlglot) |
-| `DATA` step (BY-group, `RETAIN`, arrays, `LAG`, `FIRST.`/`LAST.`) | PySpark | Deterministic + LLM |
-| Macro facility (`%MACRO`, `%LET`, `%IF`, macro vars) | Python/Jinja params | Deterministic |
+| `DATA` step (BY-group, `RETAIN`, arrays + `DO` loops, `LAG`, `FIRST.`/`LAST.`) | PySpark | Deterministic + LLM |
+| Macro facility (`%MACRO`, `%LET`, `%IF/%DO/%ELSE`, iterative `%DO`, macro vars) | Python/Jinja params | Deterministic |
 | `PROC MEANS` / `SUMMARY` / `FREQ` / `TABULATE` (measures & aggregations) | PySpark / Spark SQL | Deterministic |
 | `PROC FORMAT` (formats/informats) | PySpark UDF / mapping tables | Deterministic |
 | `PROC REPORT` / `PRINT` | Databricks notebook viz / SQL | Deterministic + LLM |
 | Statistical PROCs (`REG`, `LOGISTIC`, `GLM`, `GENMOD`) | Spark MLlib scaffold | Deterministic (review) |
 | Descriptive PROCs (`CORR`, `UNIVARIATE`) | Spark stats helpers | Deterministic |
 | Data-parity validation | `validate` notebook (row/schema/checksum diff) | Deterministic |
+| Deployment packaging | Databricks Asset Bundle (`databricks.yml`) + Workflows job graph | Deterministic |
 
 ## Three ways to use it
 
@@ -56,7 +57,7 @@ flowchart LR
         L -->|model: opus/codex/auto| T
         T --> E[Emitters]
     end
-    E --> OUT["PySpark / Spark SQL / DLT / Workflows / Validate"]
+    E --> OUT["PySpark / Spark SQL / DLT / Workflows / Validate / Bundle"]
 
     CLI["CLI: s2db migrate"] --> CORE
     MCP["MCP server (tools for Copilot)"] --> CORE
@@ -80,6 +81,10 @@ s2db convert examples/sample1_proc_sql.sas --target pyspark
 
 # Migrate an entire SAS project, choosing the LLM model for the gaps
 s2db migrate ./examples --target dlt --model opus-4.8 --out ./out
+
+# Assemble a deployable Databricks Asset Bundle (databricks.yml + src/ notebooks + reports/)
+s2db migrate ./examples --target pyspark --bundle --html --out ./bundle
+#   then:  cd bundle && databricks bundle deploy -t dev
 
 # Run the MCP server (stdio) so Copilot can call the tools
 s2db mcp
@@ -105,10 +110,12 @@ src/sas2databricks/
 ├── parser/        # SAS → preprocess → macro expansion → step split
 ├── ir/            # Intermediate representation (engine-agnostic)
 ├── transpilers/   # IR builders per SAS construct (deterministic)
-├── emitters/      # IR → PySpark / Spark SQL / DLT / Workflows / Validate
+├── emitters/      # IR → PySpark / Spark SQL / DLT / Workflows / Validate / Bundle
 ├── llm/           # Model selection + orchestrator + pluggable providers
-├── macros.py      # %MACRO body → parameterized Python function
+├── macros.py      # %MACRO body (+ %IF/%DO control flow) → parameterized Python function
 ├── mcp/           # MCP server exposing the core as tools
+├── project.py     # Project migration: flat or deployable-bundle layout
+├── report_index.py# Project-level report index (Markdown + HTML)
 ├── pipeline.py    # End-to-end orchestration
 └── cli.py         # `s2db` command-line interface
 ```
@@ -118,13 +125,17 @@ for what's planned.
 
 ## Status
 
-**v0.2.0 — real and growing.** Deterministic transpilers (with tests) cover PROC SQL,
-macro variables **and `%MACRO` definitions/invocations**, PROC MEANS/FORMAT/REPORT, the
-DATA step (BY-group, `RETAIN`, `LAG`/`DIF`, `FIRST.`/`LAST.`, `MERGE`), descriptive stats
-(`CORR`/`UNIVARIATE`), and MLlib scaffolds for `REG`/`LOGISTIC`/`GLM`. Targets include
-PySpark, Spark SQL, DLT (with expectations), Workflows, and a data-parity `validate`
-notebook. Real LLM providers (Anthropic, Azure OpenAI) plug in behind `LLMProvider`, and
-results render to an HTML report. Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
+**v0.3.0 — real and growing.** Deterministic transpilers (with tests) cover PROC SQL,
+macro variables, **`%MACRO` definitions/invocations with `%IF`/`%DO`/`%ELSE` control flow
+and iterative `%DO` loops**, PROC MEANS/FORMAT/REPORT, the DATA step (BY-group, `RETAIN`,
+`LAG`/`DIF`, `FIRST.`/`LAST.`, `MERGE`, **arrays + iterative `DO` loops**), descriptive
+stats (`CORR`/`UNIVARIATE`), and MLlib scaffolds for `REG`/`LOGISTIC`/`GLM`. Targets include
+PySpark, Spark SQL, DLT (with expectations), Workflows, a data-parity `validate` notebook,
+and a **Databricks Asset Bundle** (`databricks.yml`). `s2db migrate --bundle` assembles a
+deployable bundle (notebooks + `databricks.yml` + a roll-up **project report index**). Real
+LLM providers (Anthropic, Azure OpenAI) plug in behind `LLMProvider`, results render to an
+HTML report, and CI runs ruff + mypy + pytest on Python 3.10–3.12. Contributions welcome —
+see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

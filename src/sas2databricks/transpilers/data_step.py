@@ -25,7 +25,7 @@ _BY = re.compile(r"(?is)\bby\s+(.*?);")
 _RENAME = re.compile(r"(?is)\brename\s+(.*?);")
 _RETAIN = re.compile(r"(?is)\bretain\s+(.*?);")
 _IF_THEN = re.compile(r"(?is)\bif\s+(.*?)\s+then\s+([A-Za-z_]\w*)\s*=\s*(.*?);")
-_ASSIGN = re.compile(r"(?i)(?:^|;)\s*([A-Za-z_]\w*)\s*=\s*(.*?);")
+_ASSIGN = re.compile(r"(?i)(?:^|(?<=;))\s*([A-Za-z_]\w*)\s*=\s*(.*?);")
 
 # order-sensitive SAS constructs (need a synthetic row-order column on Spark)
 _LAG = re.compile(r"(?i)\blag(\d*)\s*\(\s*([A-Za-z_]\w*)\s*\)")
@@ -34,14 +34,102 @@ _FIRST = re.compile(r"(?i)\bfirst\.([A-Za-z_]\w*)")
 _LAST = re.compile(r"(?i)\blast\.([A-Za-z_]\w*)")
 _ORDER_SENSITIVE = re.compile(r"(?is)\b(lag\d*|dif\d*|first\.|last\.)")
 
+# arrays + iterative DO loops (deterministically unrolled into per-column assignments)
+_ARRAY_DECL = re.compile(
+    r"(?is)\barray\s+([A-Za-z_]\w*)\s*[\{\[(]\s*(\*|\d+)\s*[\}\])]\s*(?:\$\s*)?([^;]*?);"
+)
+_DO_LOOP = re.compile(
+    r"(?is)\bdo\s+([A-Za-z_]\w*)\s*=\s*([+-]?\d+)\s+to\s+([+-]?\d+)"
+    r"(?:\s+by\s+([+-]?\d+))?\s*;(.*?)\bend\s*;"
+)
+_VAR_RANGE = re.compile(r"(?i)^([A-Za-z_]\w*?)(\d+)\s*-\s*([A-Za-z_]\w*?)(\d+)$")
+
+
+def _expand_elements(raw: str) -> list[str]:
+    """Expand an array's element list, resolving ``v1-v3`` ranges to ``v1 v2 v3``."""
+    out: list[str] = []
+    for tok in re.split(r"[\s,]+", raw.strip()):
+        if not tok or tok.lower() == "_temporary_":
+            continue
+        m = _VAR_RANGE.match(tok)
+        if m and m.group(1).lower() == m.group(3).lower():
+            for i in range(int(m.group(2)), int(m.group(4)) + 1):
+                out.append(f"{m.group(1)}{i}")
+        else:
+            out.append(tok)
+    return out
+
+
+def _subscript_to_col(text: str, arrays: dict[str, list[str]]) -> str:
+    """Replace ``name{int}`` array references with the underlying column."""
+    if not arrays:
+        return text
+    names = "|".join(re.escape(n) for n in arrays)
+
+    def repl(m: re.Match) -> str:
+        nm = m.group(1).lower()
+        idx = int(m.group(2))
+        cols = arrays.get(nm, [])
+        return cols[idx - 1] if 1 <= idx <= len(cols) else m.group(0)
+
+    return re.sub(rf"(?i)\b({names})\s*[\{{\[(]\s*(\d+)\s*[\}}\])]", repl, text)
+
+
+def _expand_arrays(text: str) -> tuple[str, list[str]]:
+    """Lower SAS ``array`` declarations + iterative ``do`` loops to plain assignments.
+
+    Handles the common idiom of applying a transform across a list of columns. Loop
+    bounds must be integer literals and the loop body must not nest another ``do`` /
+    ``while`` / ``until`` (those stay flagged for review).
+    """
+    arrays: dict[str, list[str]] = {}
+    notes: list[str] = []
+
+    def _collect(m: re.Match) -> str:
+        arrays[m.group(1).lower()] = _expand_elements(m.group(3))
+        return " "
+
+    new = _ARRAY_DECL.sub(_collect, text)
+    if not arrays:
+        return text, notes
+
+    def _unroll(m: re.Match) -> str:
+        idx_var, start, stop = m.group(1), int(m.group(2)), int(m.group(3))
+        step = int(m.group(4)) if m.group(4) else 1
+        body = m.group(5)
+        if step == 0 or re.search(r"(?is)\b(do|while|until)\b", body):
+            return m.group(0)  # nested / non-iterative loop -> leave for review
+        rng = range(start, stop + 1, step) if step > 0 else range(start, stop - 1, step)
+        pieces: list[str] = []
+        for v in rng:
+            sub = re.sub(
+                rf"(?i)([\{{\[(])\s*{re.escape(idx_var)}\s*([\}}\])])",
+                rf"\g<1>{v}\g<2>",
+                body,
+            )
+            sub = _subscript_to_col(sub, arrays)
+            sub = re.sub(rf"(?i)\b{re.escape(idx_var)}\b", str(v), sub)
+            pieces.append(sub.strip())
+        return " ".join(pieces)
+
+    new = _DO_LOOP.sub(_unroll, new)
+    new = _subscript_to_col(new, arrays)
+    notes.append(
+        "expanded SAS array(s) "
+        + ", ".join(sorted(arrays))
+        + " and unrolled iterative DO loop(s) into per-column assignments; "
+        "verify element order and bounds"
+    )
+    return new, notes
+
 
 def transpile(raw: RawStep) -> DataStep:
-    text = raw.text
+    text, array_notes = _expand_arrays(raw.text)
     header = _DATA_HEADER.search(text)
     name = header.group(1) if header else "result"
 
     prov = prov_for(raw)
-    notes: list[str] = []
+    notes: list[str] = list(array_notes)
 
     merge_m = _MERGE.search(text)
     merge = _split_names(merge_m) if merge_m else []
@@ -119,6 +207,9 @@ def transpile(raw: RawStep) -> DataStep:
             "DATA step contains constructs (array/do-while/do-until) not fully lowered "
             "deterministically -- flagged for LLM assist / review"
         )
+    elif array_notes:
+        # cleanly unrolled arrays/loops: deterministic, but worth a reviewer glance
+        confidence = min(confidence, 0.85)
 
     prov.confidence = confidence
     prov.notes += notes

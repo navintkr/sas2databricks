@@ -18,13 +18,13 @@ Status legend: ✅ working · 🚧 partial · 🔭 planned
 - ✅ BY-group processing, `FIRST.`/`LAST.`, `RETAIN` (window functions)
 - ✅ `LAG()`/`DIF()` via window functions
 - ✅ `MERGE` (SAS join semantics) → DataFrame joins / `FULL JOIN USING`
-- 🚧 Arrays + `DO` loops (flagged for LLM/manual review)
+- ✅ Arrays + iterative `DO` loops (deterministic unroll; nested/non-literal loops escalate)
 - 🔭 Informats/formats applied inside DATA steps
 
 ## v0.3 — Macro facility
 - ✅ `%MACRO`/`%MEND` with positional + keyword params → Python functions
 - ✅ Macro-call expansion (inlining) before parsing
-- 🔭 `%IF/%DO/%END` control flow, `%DO` iterative loops
+- ✅ `%IF/%THEN/%DO/%ELSE/%END` control flow + iterative `%DO i = a %TO b` loops
 
 ## v0.4 — Reporting
 - ✅ PROC REPORT → notebook scaffold (basic COLUMN/GROUP)
@@ -40,6 +40,14 @@ Status legend: ✅ working · 🚧 partial · 🔭 planned
 - ✅ Databricks Workflows job graph from step dependencies
 - ✅ Data-parity validation harness (`validate` target: row/schema/checksum diff)
 - ✅ Unity Catalog naming (`--catalog`/`--schema` on DLT target)
+
+## v0.7 — Deployment & productization
+- ✅ Databricks Asset Bundle target (`bundle` → `databricks.yml`, dev/prod targets)
+- ✅ `s2db migrate --bundle` assembles a deployable bundle (notebooks + `databricks.yml` + reports)
+- ✅ Project-level report index (Markdown + HTML) rolling up every migrated file
+- ✅ CI: ruff + mypy + pytest on Python 3.10–3.12
+- ✅ `CHANGELOG.md` (Keep a Changelog)
+- 🔭 `databricks bundle validate` in CI against a sample project
 
 ## Cross-cutting
 - ✅ Web report (HTML) for migration results (`report --html`)

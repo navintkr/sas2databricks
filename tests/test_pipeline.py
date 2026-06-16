@@ -42,7 +42,7 @@ def test_auto_router_picks_opus_for_macros():
 
 def test_all_targets_emit_something():
     sas = (EXAMPLES / "sample1_proc_sql.sas").read_text()
-    for target in ("pyspark", "sparksql", "dlt", "workflow", "validate"):
+    for target in ("pyspark", "sparksql", "dlt", "workflow", "validate", "bundle"):
         result = migrate(sas, target=target)
         assert result.code.strip()
         assert result.filename

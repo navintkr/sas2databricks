@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from ..ir import Program
 from . import (
+    bundle_emitter,
     dlt_emitter,
     pyspark_emitter,
     sparksql_emitter,
@@ -17,6 +18,7 @@ TARGETS = {
     "dlt": ("dlt_pipeline.py", dlt_emitter.emit),
     "workflow": ("job.json", workflow_emitter.emit),
     "validate": ("validation.py", validation_emitter.emit),
+    "bundle": ("databricks.yml", bundle_emitter.emit),
 }
 
 

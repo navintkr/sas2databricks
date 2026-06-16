@@ -206,8 +206,8 @@ def _stat(step: StatStep) -> str:
             f"{var} = spark.createDataFrame([{rows}], ['x', 'y', 'corr'])\n"
             f"display({var})"
         )
-    cols = ", ".join(f'"{c}"' for c in step.columns) if step.columns else ""
-    target = f"{src}.select({cols})" if cols else src
+    cols_sql = ", ".join(f'"{c}"' for c in step.columns) if step.columns else ""
+    target = f"{src}.select({cols_sql})" if cols_sql else src
     return (
         f"# PROC UNIVARIATE -> descriptive statistics\n"
         f"{var} = {target}.summary()  # count/mean/stddev/min/quartiles/max\n"

@@ -12,21 +12,32 @@ from ..ir import Program
 from .base import safe_name
 
 
-def emit(
-    prog: Program,
-    *,
-    source_path: str = "",
-    notebook_base: str = "/Workspace/sas_migration",
-) -> str:
-    produced: dict[str, str] = {}
-    for step in prog.steps:
-        produced[safe_name(step.name)] = safe_name(step.name)
+def build_tasks(prog: Program, *, notebook_base: str = "/Workspace/sas_migration") -> list[dict]:
+    """Build the ordered list of notebook tasks (with dependencies) for a program.
 
-    tasks = []
+    Shared by the Workflows JSON emitter and the Databricks Asset Bundle emitter so the
+    two targets agree on task keys and the step dependency graph.
+
+    Dependencies are matched on both the full dataset name and its unqualified tail, so a
+    ``proc sql`` reading ``enriched`` still links to a DATA step named ``work.enriched``.
+    """
+    alias_to_key: dict[str, str] = {}
+    for step in prog.steps:
+        key = safe_name(step.name)
+        for alias in (key, safe_name(step.name.split(".")[-1])):
+            alias_to_key.setdefault(alias, key)
+
+    def resolve(name: str) -> str | None:
+        for alias in (safe_name(name), safe_name(name.split(".")[-1])):
+            if alias in alias_to_key:
+                return alias_to_key[alias]
+        return None
+
+    tasks: list[dict] = []
     for step in prog.steps:
         key = safe_name(step.name)
         deps = sorted(
-            {safe_name(i) for i in step.inputs if safe_name(i) in produced and safe_name(i) != key}
+            {dep for i in step.inputs if (dep := resolve(i)) is not None and dep != key}
         )
         task: dict = {
             "task_key": key,
@@ -38,10 +49,18 @@ def emit(
         if deps:
             task["depends_on"] = [{"task_key": d} for d in deps]
         tasks.append(task)
+    return tasks
 
+
+def emit(
+    prog: Program,
+    *,
+    source_path: str = "",
+    notebook_base: str = "/Workspace/sas_migration",
+) -> str:
     job = {
         "name": "sas_migration_job",
-        "tasks": tasks,
+        "tasks": build_tasks(prog, notebook_base=notebook_base),
         "format": "MULTI_TASK",
         "tags": {"generated_by": "sas2databricks", "source": source_path or "in-memory"},
     }

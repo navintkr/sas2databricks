@@ -42,6 +42,10 @@ class Step:
     prov: Provenance
     inputs: list[str] = field(default_factory=list)  # upstream dataset names
 
+    # Set by the LLM orchestrator when a low-confidence node is escalated.
+    llm_code: str | None = None
+    llm_fulfilled: bool = False  # True only when a provider actually returned code
+
     kind: str = "step"
 
 
