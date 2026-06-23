@@ -1,4 +1,4 @@
-# sas2databricks 🦶
+# sas2databricks
 
 ### `sas2databricks` - track down your SAS and set it free in the Databricks lakehouse.
 
